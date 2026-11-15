@@ -13,9 +13,8 @@ import {
 import {
   AnalysisSnapshot,
   ChatMessage,
-  getSavedOpenRouterKey,
-  getSavedOpenRouterModel,
-  sendAgenticChatWithOpenRouter,
+  getActiveAiConfiguration,
+  sendAgenticChat,
   ToolExecutionHandler,
 } from '../../lib/aiAdvisor';
 import { CURRENCIES, formatCompactCurrency } from '../../lib/currency';
@@ -134,8 +133,9 @@ export function AiAdvisorDrawer({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const initializedRef = useRef(false);
 
-  const apiKey = getSavedOpenRouterKey();
-  const activeModel = getSavedOpenRouterModel();
+  const aiConfig = getActiveAiConfiguration();
+  const { provider, apiKey, model: activeModel, isConfigured } = aiConfig;
+  const providerLabel = provider === 'gemini' ? 'Gemini' : 'OpenRouter';
   const sym = CURRENCIES[snapshot.currency].symbol;
 
   const actionChips = [
@@ -150,17 +150,17 @@ export function AiAdvisorDrawer({
       abortRef.current?.abort();
       return;
     }
-    if (!initializedRef.current && messages.length === 0 && apiKey) {
+    if (!initializedRef.current && messages.length === 0 && isConfigured) {
       initializedRef.current = true;
       setMessages([
         {
           id: 'welcome-copilot',
           role: 'assistant',
-          content: `I'm connected to your live **${snapshot.calculatorName}** workspace. Ask for an analysis or tell me how to adjust your sliders, step-ups, portfolio streams, or inflation benchmark.`,
+          content: `I'm connected via **${providerLabel}** (\`${activeModel}\`) to your live **${snapshot.calculatorName}** workspace. Ask for an analysis or tell me how to adjust your sliders, step-ups, portfolio streams, or inflation benchmark.`,
         },
       ]);
     }
-  }, [isOpen, apiKey, settingsVersion]);
+  }, [isOpen, isConfigured, providerLabel, activeModel, settingsVersion]);
 
   useEffect(() => {
     scrollEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -184,8 +184,8 @@ export function AiAdvisorDrawer({
   }, [input]);
 
   const dispatchMessage = async (userText: string) => {
-    const currentKey = getSavedOpenRouterKey();
-    if (!currentKey) return;
+    const latestConfig = getActiveAiConfiguration();
+    if (!latestConfig.isConfigured) return;
 
     const userMsg: ChatMessage = {
       id: `user-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
@@ -202,13 +202,12 @@ export function AiAdvisorDrawer({
     abortRef.current = controller;
 
     try {
-      const result = await sendAgenticChatWithOpenRouter(
+      const result = await sendAgenticChat(
         getLatestSnapshot,
         nextHistory
           .filter((m) => m.id !== 'welcome-copilot')
           .map((m) => ({ role: m.role, content: m.content })),
-        currentKey,
-        getSavedOpenRouterModel(),
+        latestConfig,
         onExecuteToolCall,
         controller.signal
       );
@@ -222,7 +221,10 @@ export function AiAdvisorDrawer({
       setMessages((prev) => [...prev, assistantMsg]);
     } catch (err) {
       if ((err as Error).name !== 'AbortError') {
-        setError((err as Error).message || 'Unable to reach OpenRouter.');
+        setError(
+          (err as Error).message ||
+            `Unable to reach ${latestConfig.provider === 'gemini' ? 'Gemini' : 'OpenRouter'}.`
+        );
       }
     } finally {
       setLoading(false);
@@ -232,7 +234,7 @@ export function AiAdvisorDrawer({
   const handleSubmit = (e?: React.FormEvent) => {
     e?.preventDefault();
     const trimmed = input.trim();
-    if (!trimmed || loading || !apiKey) return;
+    if (!trimmed || loading || !isConfigured) return;
     setInput('');
     void dispatchMessage(trimmed);
   };
@@ -291,13 +293,13 @@ export function AiAdvisorDrawer({
                     </span>
                   </div>
                   <p className="text-[11px] font-mono text-slate-500 dark:text-slate-400 truncate">
-                    {activeModel}
+                    {providerLabel} · {activeModel || 'No model set'}
                   </p>
                 </div>
               </div>
 
               <div className="flex items-center gap-1 shrink-0">
-                {apiKey && (
+                {isConfigured && (
                   <button
                     type="button"
                     onClick={handleResetChat}
@@ -352,17 +354,21 @@ export function AiAdvisorDrawer({
 
             {/* Chat Message Thread */}
             <div className="flex-1 overflow-y-auto p-4 sm:p-5 space-y-4">
-              {!apiKey ? (
+              {!isConfigured ? (
                 <div className="h-full flex flex-col items-center justify-center text-center px-4 space-y-4">
                   <div className="h-12 w-12 rounded-[12px] bg-[#5367F5]/12 text-[#5367F5] dark:text-[#7C8CFF] flex items-center justify-center">
                     <KeyRound className="w-5 h-5" aria-hidden="true" />
                   </div>
                   <div className="space-y-1.5 max-w-xs">
                     <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                      Configure your OpenRouter API key
+                      {!apiKey
+                        ? 'Configure your Gemini or OpenRouter API key'
+                        : `Enter an ${providerLabel} model name`}
                     </h3>
                     <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
-                      Add your OpenRouter key locally in browser storage so the Copilot can read your workspace and adjust sliders, portfolio streams, and inflation in real time.
+                      {!apiKey
+                        ? 'Add a Google Gemini or OpenRouter key locally in browser storage so the Copilot can read your workspace and adjust sliders, portfolio streams, and inflation in real time.'
+                        : `Add your target ${providerLabel} model name (for example nvidia/nemotron-...) in AI settings to activate the Copilot.`}
                     </p>
                   </div>
                   <button
@@ -441,7 +447,7 @@ export function AiAdvisorDrawer({
                   <button
                     key={chip}
                     type="button"
-                    disabled={!apiKey || loading}
+                    disabled={!isConfigured || loading}
                     onClick={() => void dispatchMessage(chip)}
                     className="min-h-[32px] px-2.5 py-1 rounded-[6px] border border-black/[0.08] dark:border-white/[0.08] bg-[#F8FAFC] dark:bg-[#080A11] text-[11px] font-medium text-slate-600 dark:text-slate-300 hover:border-[#5367F5] hover:text-[#5367F5] dark:hover:text-[#7C8CFF] disabled:opacity-50 transition-colors cursor-pointer"
                   >
@@ -462,18 +468,18 @@ export function AiAdvisorDrawer({
                       handleSubmit();
                     }
                   }}
-                  disabled={!apiKey || loading}
+                  disabled={!isConfigured || loading}
                   placeholder={
-                    apiKey
-                      ? 'Ask AI to analyze or adjust sliders, streams, or inflation...'
-                      : 'Configure your OpenRouter API key to activate Copilot'
+                    isConfigured
+                      ? `Ask ${providerLabel} to analyze or adjust sliders, streams, or inflation...`
+                      : 'Configure your Gemini or OpenRouter API key & model in AI settings'
                   }
                   aria-label="Ask AI Advisor a follow-up question"
                   className="flex-1 min-h-[44px] max-h-[120px] resize-none rounded-[10px] border border-black/[0.08] dark:border-white/[0.08] bg-[#F8FAFC] dark:bg-[#080A11] px-3.5 py-2.5 text-xs sm:text-[13px] text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 outline-none focus:border-[#5367F5] disabled:opacity-60"
                 />
                 <button
                   type="submit"
-                  disabled={!apiKey || loading || !input.trim()}
+                  disabled={!isConfigured || loading || !input.trim()}
                   aria-label="Send message"
                   className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center rounded-[10px] bg-[#5367F5] hover:bg-[#4255E0] disabled:opacity-40 text-white transition-colors shrink-0 cursor-pointer"
                 >
