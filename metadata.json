@@ -1,0 +1,6 @@
+{
+  "name": "Meridian Wealth Calculator",
+  "description": "Precision investment calculator suite and multi-stream portfolio aggregator",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
